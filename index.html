@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leitor de QR Code para Credenciamento</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #video-container.success-scan {
+            box-shadow: 0 0 20px 10px rgba(74, 222, 128, 0.7); /* Green glow */
+            transition: box-shadow 0.1s ease-in-out;
+        }
+        .scan-box-corner {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border: 4px solid white;
+        }
+        .top-left { top: -5px; left: -5px; border-right: none; border-bottom: none; }
+        .top-right { top: -5px; right: -5px; border-left: none; border-bottom: none; }
+        .bottom-left { bottom: -5px; left: -5px; border-right: none; border-top: none; }
+        .bottom-right { bottom: -5px; right: -5px; border-left: none; border-top: none; }
+        .spinner {
+            border-top-color: #4f46e5;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl mx-auto bg-white rounded-2xl shadow-lg p-6 md:p-8 text-center">
+        
+        <div id="scanner-view">
+            <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Registro de Participantes</h1>
+            <p id="status-message" class="text-lg text-gray-600 mb-6">Comece escaneando o QR Code do Banner</p>
+
+            <!-- Container da Câmera -->
+            <div id="camera-section" class="mb-6">
+                <div id="loading-message" class="text-gray-500">
+                    <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Iniciando câmera...
+                </div>
+                <div id="video-container" class="relative w-full max-w-md mx-auto rounded-lg overflow-hidden hidden bg-gray-900">
+                    <video id="video" playsinline class="w-full h-auto"></video>
+                    <div class="scan-box-corner top-left"></div>
+                    <div class="scan-box-corner top-right"></div>
+                    <div class="scan-box-corner bottom-left"></div>
+                    <div class="scan-box-corner bottom-right"></div>
+                </div>
+                <canvas id="canvas" class="hidden"></canvas>
+            </div>
+
+            <!-- Resultados do Scan -->
+            <div id="results-section" class="space-y-4 mb-6">
+                <div class="bg-indigo-50 p-4 rounded-lg text-left">
+                    <p class="font-semibold text-indigo-800">QR Code Banner:</p>
+                    <p id="banner-result" class="text-lg text-indigo-600 truncate">Aguardando...</p>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg text-left">
+                    <p class="font-semibold text-green-800">QR Code Crachá:</p>
+                    <p id="cracha-result" class="text-lg text-green-600 truncate">Aguardando...</p>
+                </div>
+            </div>
+
+            <!-- Botão de Confirmação -->
+            <div id="actions-section">
+                <button id="confirm-button" class="bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-indigo-700 transition-colors duration-300 shadow-md w-full sm:w-auto hidden">
+                    <span id="confirm-text">Confirmar Credenciamento</span>
+                    <div id="confirm-spinner" class="spinner w-6 h-6 border-4 rounded-full hidden mx-auto"></div>
+                </button>
+            </div>
+        </div>
+
+        <!-- Visão de Sucesso -->
+        <div id="success-view" class="hidden text-center py-10">
+             <div class="mx-auto bg-green-100 rounded-full h-20 w-20 flex items-center justify-center">
+                <svg class="h-12 w-12 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+            </div>
+            <h2 class="text-2xl font-bold mt-6 mb-2">Credenciado com Sucesso!</h2>
+            <p id="error-message" class="text-red-500 mb-4 hidden"></p>
+            <button id="scan-next-button" class="mt-6 bg-gray-700 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-800 transition-colors duration-300 shadow-md w-full sm:w-auto">Credenciar Próximo</button>
+        </div>
+
+    </div>
+
+    <script>
+        // !!! IMPORTANTE !!! Cole a URL do seu Google Apps Script aqui
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMVV8NlvK5B2JW1JrkkubymlR8OKSvg-Y01sbfxDawF6UX8Jabeo5lIgW4Ovxe_zin/exec';
+
+        const video = document.getElementById('video');
+        const canvasElement = document.getElementById('canvas');
+        const canvas = canvasElement.getContext('2d');
+        const loadingMessage = document.getElementById('loading-message');
+        const videoContainer = document.getElementById('video-container');
+        
+        const statusMessage = document.getElementById('status-message');
+        const bannerResultEl = document.getElementById('banner-result');
+        const crachaResultEl = document.getElementById('cracha-result');
+        
+        const confirmButton = document.getElementById('confirm-button');
+        const confirmText = document.getElementById('confirm-text');
+        const confirmSpinner = document.getElementById('confirm-spinner');
+
+        const scanNextButton = document.getElementById('scan-next-button');
+        const scannerView = document.getElementById('scanner-view');
+        const successView = document.getElementById('success-view');
+        const errorMessage = document.getElementById('error-message');
+
+        let scanning = false;
+        let currentScanStep = 'banner'; // 'banner' ou 'cracha'
+        let bannerData = null;
+        let crachaData = null;
+        let stream = null;
+
+        async function startCamera() {
+            try {
+                if (!stream || stream.getTracks().every(track => track.readyState === 'ended')) {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                    video.srcObject = stream;
+                    video.setAttribute("playsinline", true);
+                    await video.play();
+                }
+                scanning = true;
+                requestAnimationFrame(tick);
+                
+                loadingMessage.classList.add('hidden');
+                videoContainer.classList.remove('hidden');
+
+            } catch (err) {
+                console.error("Erro ao acessar a câmera:", err);
+                loadingMessage.textContent = 'Erro ao acessar a câmera. Verifique as permissões.';
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            scanning = false;
+        }
+
+        function tick() {
+            if (!scanning) return;
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvasElement.height = video.videoHeight;
+                canvasElement.width = video.videoWidth;
+                canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+                const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height);
+                if (code) handleQRCode(code.data);
+            }
+            requestAnimationFrame(tick);
+        }
+
+        function handleQRCode(data) {
+            if (currentScanStep === 'banner' && data) {
+                bannerData = data;
+                bannerResultEl.textContent = bannerData;
+                statusMessage.textContent = 'Ótimo! Agora aponte para o QR Code do CRACHÁ';
+                currentScanStep = 'cracha';
+                playSuccessSound();
+                showSuccessAnimation();
+            } else if (currentScanStep === 'cracha' && data && data !== bannerData) {
+                crachaData = data;
+                crachaResultEl.textContent = crachaData;
+                statusMessage.textContent = 'Confirme os dados para enviar o registro.';
+                
+                stopCamera();
+                playSuccessSound();
+                showSuccessAnimation();
+                confirmButton.classList.remove('hidden');
+            }
+        }
+        
+        function playSuccessSound() {
+             try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+                oscillator.connect(audioContext.destination);
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.1);
+            } catch (e) {
+                console.error("Erro ao tocar o som:", e);
+            }
+        }
+
+        function showSuccessAnimation() {
+            videoContainer.classList.add('success-scan');
+            setTimeout(() => videoContainer.classList.remove('success-scan'), 300);
+        }
+
+        function resetScannerState() {
+            scannerView.classList.remove('hidden');
+            successView.classList.add('hidden');
+            errorMessage.classList.add('hidden');
+
+            currentScanStep = 'banner';
+            bannerData = null;
+            crachaData = null;
+            
+            bannerResultEl.textContent = 'Aguardando...';
+            crachaResultEl.textContent = 'Aguardando...';
+            statusMessage.textContent = 'Comece escaneando o QR Code do Banner';
+            
+            confirmButton.classList.add('hidden');
+            confirmButton.disabled = false;
+            confirmText.classList.remove('hidden');
+            confirmSpinner.classList.add('hidden');
+
+            startCamera();
+        }
+
+        confirmButton.addEventListener('click', async () => {
+            if (GOOGLE_SCRIPT_URL === 'https://script.google.com/macros/s/AKfycbxMVV8NlvK5B2JW1JrkkubymlR8OKSvg-Y01sbfxDawF6UX8Jabeo5lIgW4Ovxe_zin/exec’) {
+                alert('ERRO: A URL do Google Apps Script não foi configurada no arquivo HTML.');
+                return;
+            }
+            
+            confirmButton.disabled = true;
+            confirmText.classList.add('hidden');
+            confirmSpinner.classList.remove('hidden');
+            
+            try {
+                const response = await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors', // Importante para evitar erros de CORS com Apps Script
+                    cache: 'no-cache',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ banner: bannerData, cracha: crachaData })
+                });
+                
+                // Com mode: 'no-cors', não podemos ler a resposta, então apenas assumimos o sucesso.
+                scannerView.classList.add('hidden');
+                successView.classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Erro ao enviar dados:', error);
+                errorMessage.textContent = `Erro ao enviar: ${error.message}. Tente novamente.`;
+                errorMessage.classList.remove('hidden');
+                
+                // Re-habilita o botão em caso de erro
+                confirmButton.disabled = false;
+                confirmText.classList.remove('hidden');
+                confirmSpinner.classList.add('hidden');
+            }
+        });
+
+        scanNextButton.addEventListener('click', resetScannerState);
+
+        window.addEventListener('load', startCamera);
+    </script>
+</body>
+</html>
